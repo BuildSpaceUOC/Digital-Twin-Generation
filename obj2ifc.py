@@ -1,0 +1,107 @@
+# generate ifc from obj mesh
+
+import numpy as np
+import ifcopenshell
+import pywavefront
+import uuid
+
+
+
+# create a new blank ifc file
+def setup_ifc_file(blueprint):
+    ifc = ifcopenshell.open(blueprint)
+    ifcNew = ifcopenshell.file(schema=ifc.schema)
+
+    owner_history = ifc.by_type("IfcOwnerHistory")[0]
+    project = ifc.by_type("IfcProject")[0]
+    context = ifc.by_type("IfcGeometricRepresentationContext")[0]
+    floor = ifc.by_type("IfcBuildingStorey")[0]
+    ifcNew.add(project)
+    ifcNew.add(owner_history)
+    ifcNew.add(context)
+    ifcNew.add(floor)
+
+    return ifcNew
+
+
+def create_guid(): return ifcopenshell.guid.compress(uuid.uuid1().hex)
+
+
+# load obj file
+obj_file = "input_obj_file.obj"
+blueprint = 'sample.ifc'
+
+scene = pywavefront.Wavefront(obj_file, collect_faces=True)
+f = scene.mesh_list[0].faces
+v = scene.vertices
+
+fx = []
+for i in f:
+    fx.append([i[0] + 1, i[1] + 1, i[2] + 1])
+print(len(v), len(f))
+
+# create new ifc file from blueprint
+new_ifc = setup_ifc_file(blueprint)
+owner_history = new_ifc.by_type("IfcOwnerHistory")[0]
+project = new_ifc.by_type("IfcProject")[0]
+context = new_ifc.by_type("IfcGeometricRepresentationContext")[0]
+floor = new_ifc.by_type("IfcBuildingStorey")[0]
+
+ifc_info = {"owner_history": owner_history,
+            "project": project,
+            "context": context,
+            "floor": floor}
+
+owner_history = ifc_info["owner_history"]
+container = ifc_info['floor']
+context = ifc_info["context"]
+project = ifc_info["project"]
+name = "roof"
+
+# create mesh
+point_list = new_ifc.createIfcCartesianPointList3D()
+point_list.CoordList = v
+
+faces = []
+for face in fx:
+    new_face = new_ifc.createIfcIndexedPolygonalFace(face)
+    faces.append(new_face)
+
+faceset = new_ifc.createIfcPolygonalFaceSet()
+faceset.Faces = faces
+faceset.Closed = False
+faceset.Coordinates = point_list
+
+# placement
+Z = 0., 0., 1.
+B1 = new_ifc.createIfcRoof(create_guid(), owner_history, name)
+
+direction = (1.0, 0.0, 0.0)
+B1_Point = new_ifc.createIfcCartesianPoint((0.0, 0.0, 0.0))
+B1_Axis2Placement = new_ifc.createIfcAxis2Placement3D(B1_Point)
+B1_Axis2Placement.Axis = new_ifc.createIfcDirection(direction)
+B1_Axis2Placement.RefDirection = new_ifc.createIfcDirection(
+    np.cross(direction, Z).tolist())
+
+B1_Placement = new_ifc.createIfcLocalPlacement(
+    container.ObjectPlacement, B1_Axis2Placement)
+B1.ObjectPlacement = B1_Placement
+
+# set representation
+B1_Repr = new_ifc.createIfcShapeRepresentation()
+B1_Repr.ContextOfItems = context
+B1_Repr.RepresentationIdentifier = 'Body'
+B1_Repr.RepresentationType = 'Tessellation'
+B1_Repr.Items = [faceset]
+
+B1_DefShape = new_ifc.createIfcProductDefinitionShape()
+B1_DefShape.Representations = [B1_Repr]
+B1.Representation = B1_DefShape
+
+Flr1_Container = new_ifc.createIfcRelContainedInSpatialStructure(
+    create_guid(), owner_history)
+Flr1_Container.RelatedElements = [B1]
+Flr1_Container.RelatingStructure = container
+
+# save file
+new_ifc.write("output_roof.ifc")
